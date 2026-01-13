@@ -7,6 +7,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
+# On importe la nouvelle librairie de recherche
+from duckduckgo_search import DDGS
+
 from companies import TARGET_COMPANIES
 from keywords import BLACKLIST, GOLDLIST_JOBS, DATE_KEYWORDS, LOCATIONS
 
@@ -22,26 +25,23 @@ def send_telegram(message):
     except Exception as e: print(f"❌ Erreur Telegram : {e}")
 
 def get_driver():
-    """Configuration V6"""
+    """Configuration Selenium (pour Indeed/JobTeaser uniquement)"""
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
     chrome_options.add_argument("--window-size=1920,1080")
-    
-    uas = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    ]
-    chrome_options.add_argument(f"user-agent={random.choice(uas)}")
-    
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
     chrome_options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def process_job(title, company, location, link, source, description_snippet=""):
-    link = link.split('&')[0]
+    # Nettoyage
+    try: link = link.split('&')[0]
+    except: pass
+    
     title = title.strip() if title else "Titre Inconnu"
     company = company.strip() if company else "Entreprise Inconnue"
     
@@ -76,7 +76,7 @@ def process_job(title, company, location, link, source, description_snippet=""):
         if target.lower() in company.lower() or target.lower() in title.lower(): 
             is_target = True; break
     
-    # Si c'est une Top Company, on accepte tout (on triera à la main)
+    # Si c'est une Top Company, on accepte tout
     if is_target:
         loc_ok = True 
     else:
@@ -105,62 +105,56 @@ def process_job(title, company, location, link, source, description_snippet=""):
     else:
         print(f"      -> 📉 Note trop basse ({score}/10)")
 
-# --- FONCTION VIP : RECHERCHE ÉLARGIE ---
+# --- FONCTION VIP : LA NOUVELLE MÉTHODE (DuckDuckGo Library) ---
 def scrape_vip_companies():
-    print("🚀 Lancement du SCAN VIP (Recherche Large)...")
-    driver = get_driver()
+    print("🚀 Lancement du SCAN VIP (Via DuckDuckGo API)...")
+    
     vip_list = list(TARGET_COMPANIES)
     random.shuffle(vip_list)
-    batch_size = 4
+    batch_size = 5 # On peut faire des groupes un peu plus gros
     
-    # C'est ici que ça se joue : On définit les mots clés métiers
-    job_keywords = '"Asset Management" OR "Investment" OR "Sales" OR "Portfolio" OR "Wealth Management" OR "Private Banking" OR "Analyst" OR "Equity"'
+    # Mots clés métiers
+    job_keywords = '"Asset Management" OR "Investment" OR "Sales" OR "Portfolio" OR "Wealth Management" OR "Analyst" OR "Equity"'
     
     try:
-        for i in range(0, len(vip_list), batch_size):
-            batch = vip_list[i:i + batch_size]
-            companies_query = " OR ".join([f'"{c}"' for c in batch])
-            
-            print(f"   🎯 Scan Groupe : {', '.join(batch)}...")
-            
-            # Requête : (Boites) (Métiers) (Stage) -SitesPoubelles
-            search_query = f'({companies_query}) ({job_keywords}) ("Stage" OR "Internship") -site:linkedin.com -site:indeed.com -site:glassdoor.com -site:welcometothejungle.com'
-            
-            url = f"https://www.google.com/search?q={search_query}&hl=fr"
-            driver.get(url)
-            time.sleep(random.uniform(4, 7))
-            
-            try:
-                buttons = driver.find_elements(By.TAG_NAME, "button")
-                for btn in buttons:
-                    if "tout refuser" in btn.text.lower() or "reject all" in btn.text.lower():
-                        btn.click()
-                        break
-            except: pass
-
-            results = driver.find_elements(By.CSS_SELECTOR, "div.g")
-            print(f"      -> {len(results)} résultats.")
-            
-            for res in results:
-                try:
-                    title = res.find_element(By.TAG_NAME, "h3").text
-                    link = res.find_element(By.TAG_NAME, "a").get_attribute("href")
-                    
-                    company_found = "Boite VIP"
-                    for comp in batch:
-                        if comp.lower() in title.lower() or comp.lower() in link.lower():
-                            company_found = comp
-                            break
-                    
-                    process_job(title, company_found, "Site Direct", link, "VIP Search")
-                except: continue
-            
-            time.sleep(2)
+        # On utilise le gestionnaire de contexte DDGS
+        with DDGS() as ddgs:
+            for i in range(0, len(vip_list), batch_size):
+                batch = vip_list[i:i + batch_size]
+                companies_query = " OR ".join([f'"{c}"' for c in batch])
+                
+                print(f"   🎯 Scan Groupe : {', '.join(batch)}...")
+                
+                # Requête DuckDuckGo
+                # On utilise region='fr-fr' pour prioriser l'Europe
+                search_query = f'({companies_query}) ({job_keywords}) ("Stage" OR "Internship") -site:linkedin.com -site:indeed.com -site:glassdoor.com'
+                
+                # On demande 10 résultats par groupe
+                results = list(ddgs.text(search_query, region='fr-fr', max_results=10))
+                
+                print(f"      -> {len(results)} résultats.")
+                
+                for res in results:
+                    try:
+                        title = res['title']
+                        link = res['href']
+                        snippet = res['body']
+                        
+                        company_found = "Boite VIP"
+                        for comp in batch:
+                            if comp.lower() in title.lower() or comp.lower() in link.lower():
+                                company_found = comp
+                                break
+                        
+                        process_job(title, company_found, "Site Direct", link, "VIP Search", snippet)
+                    except: continue
+                
+                # Petite pause pour être poli
+                time.sleep(2)
 
     except Exception as e: print(f"Erreur VIP: {e}")
-    finally: driver.quit()
 
-# --- AUTRES SCRAPERS ---
+# --- AUTRES SCRAPERS (Selenium) ---
 
 def scrape_jobteaser():
     print("running: JobTeaser...")
@@ -204,13 +198,13 @@ def scrape_indeed_ch():
     finally: driver.quit()
 
 def run_all():
-    print("🚀 Démarrage V6 (Recherche Large)...")
+    print("🚀 Démarrage V7 (Mode Hybride)...")
     scrape_vip_companies()
     time.sleep(5)
     scrape_jobteaser()
     time.sleep(5)
     scrape_indeed_ch()
-    print("✅ Fin V6.")
+    print("✅ Fin V7.")
 
 schedule.every(4).hours.do(run_all)
 run_all()
