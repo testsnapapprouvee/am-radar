@@ -1,4 +1,4 @@
+selenium
+webdriver-manager
+schedule
 requests
-beautifulsoup4
-twilio
-lxml
