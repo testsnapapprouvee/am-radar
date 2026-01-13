@@ -52,53 +52,87 @@ def get_driver():
     return webdriver.Chrome(service=service, options=chrome_options)
 
 def process_job(title, company, location, link, source, description_snippet=""):
-    """Cerveau central : Filtre, Note et Envoie"""
+    """
+    Cerveau central : VERBEUX
+    Affiche exactement pourquoi une offre est prise ou rejetée.
+    """
+    # Nettoyage
+    link = link.split('?')[0]
+    title_clean = title.strip()
+    company_clean = company.strip()
+    
+    print(f"   🔎 ANALYSE: [{title_clean}] chez [{company_clean}] ({location})")
+
+    # 1. Vérification Historique
     if not os.path.exists(HISTORY_FILE):
         open(HISTORY_FILE, "w").close()
     with open(HISTORY_FILE, "r") as f:
         history = f.read()
-
-    link = link.split('?')[0] # Nettoyage lien
-    if link in history: return
-
-    # --- SCORING ---
-    score = 5
     
-    # 1. Entreprise (+3)
-    is_target = False
-    for target in TARGET_COMPANIES:
-        if target.lower() in company.lower() or target.lower() in title.lower(): 
-            score += 3
-            is_target = True
-            break
-            
-    # 2. Métier (+2)
-    for gold_word in GOLDLIST_JOBS:
-        if gold_word.lower() in title.lower(): score += 2; break
-        
-    # 3. Kill Switch
-    for bad_word in BLACKLIST:
-        if bad_word.lower() in title.lower(): return
-        
-    # 4. Filtre Date
-    for date_word in DATE_KEYWORDS:
-        if date_word.lower() in description_snippet.lower(): score += 1; break
+    if link in history:
+        print("      -> 🛑 REJET: Déjà traité (Historique)")
+        return
 
-    # 5. Filtre Localisation Strict
+    # 2. Kill Switch (Blacklist)
+    for bad_word in BLACKLIST:
+        if bad_word.lower() in title.lower():
+            print(f"      -> 🛑 REJET: Blacklisté (Mot interdit: '{bad_word}')")
+            return
+
+    # 3. Filtre Localisation Strict
     loc_ok = False
     for loc in LOCATIONS:
         if loc.lower() in location.lower() or loc.lower() in title.lower() or loc.lower() in description_snippet.lower():
             loc_ok = True
             break
-    
+    # Exception pour la Suisse sur Indeed
     if "suisse" in location.lower() or "switzerland" in location.lower() or "zurich" in location.lower() or "geneva" in location.lower():
         loc_ok = True
 
-    if not loc_ok and not is_target:
+    # Note : Si c'est une Top Company, on est plus tolérant sur la localisation
+    is_target_company = False
+    for target in TARGET_COMPANIES:
+        if target.lower() in company.lower() or target.lower() in title.lower(): 
+            is_target_company = True
+            break
+
+    if not loc_ok and not is_target_company:
+        print(f"      -> 🛑 REJET: Mauvaise localisation ({location}) et pas une Top Company")
+        return
+
+    # --- SCORING DÉTAILLÉ ---
+    score = 5 # Base
+    details = ["Base: 5"]
+    
+    # Bonus Entreprise (+3)
+    if is_target_company:
+        score += 3
+        details.append("TopCompany(+3)")
+            
+    # Bonus Métier (+2)
+    for gold_word in GOLDLIST_JOBS:
+        if gold_word.lower() in title.lower(): 
+            score += 2
+            details.append(f"Métier('{gold_word}':+2)")
+            break
+        
+    # Bonus Date (+1)
+    for date_word in DATE_KEYWORDS:
+        if date_word.lower() in description_snippet.lower(): 
+            score += 1
+            details.append(f"Date('{date_word}':+1)")
+            break
+
+    # Filtre Luxembourg (Spécifique)
+    if "luxembourg" in location.lower() and score < 7:
+        print(f"      -> 🛑 REJET: Luxembourg mais score faible ({score}/10)")
         return 
 
-    # SEUIL D'ENVOI
+    # --- DÉCISION FINALE ---
+    print(f"      -> 📝 NOTE FINALE: {score}/10. Détails: {', '.join(details)}")
+
     if score >= 6:
+        print("      -> 🔥 SUCCÈS: Notification envoyée !")
         emoji = "🔥" if score >= 8 else "✅"
         msg = (
             f"{emoji} *{source} ({score}/10)*\n"
@@ -111,6 +145,9 @@ def process_job(title, company, location, link, source, description_snippet=""):
         
         with open(HISTORY_FILE, "a") as f:
             f.write(link + "\n")
+    else:
+        print(f"      -> 📉 REJET: Note insuffisante (< 6/10)")
+
 
 # --- MODULE 1 : INDEED SUISSE ---
 def scrape_indeed_ch():
@@ -122,7 +159,7 @@ def scrape_indeed_ch():
         time.sleep(random.uniform(5, 8))
         
         cards = driver.find_elements(By.CLASS_NAME, "resultContent")
-        print(f"Indeed CH: {len(cards)} offres trouvées")
+        print(f"Indeed CH: {len(cards)} offres trouvées sur la page.")
 
         for card in cards:
             try:
@@ -154,14 +191,13 @@ def scrape_wttj():
         driver.get(url)
         time.sleep(5)
         cards = driver.find_elements(By.TAG_NAME, "article")
+        print(f"WTTJ: {len(cards)} offres trouvées.")
+        
         for card in cards:
             try:
                 try: title = card.find_element(By.TAG_NAME, "h4").text
                 except: title = card.find_element(By.TAG_NAME, "h3").text
-                
-                # C'EST ICI QUE L'ERREUR ÉTAIT (LIGNE 171)
                 company = card.find_element(By.TAG_NAME, "span").text 
-                
                 link = card.find_element(By.TAG_NAME, "a").get_attribute("href")
                 process_job(title, company, "Paris", link, "WTTJ")
             except: continue
@@ -177,6 +213,8 @@ def scrape_jobteaser():
         driver.get(url)
         time.sleep(5)
         links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/job-offers/']")
+        print(f"JobTeaser: {len(links)} liens trouvés.")
+        
         for link_elem in links:
             try:
                 link = link_elem.get_attribute("href")
@@ -205,6 +243,8 @@ def scrape_ats_xray():
             time.sleep(random.uniform(4, 7)) 
             
             results = driver.find_elements(By.CLASS_NAME, "b_algo")
+            print(f"   -> {len(results)} résultats trouvés.")
+            
             for res in results:
                 try:
                     title_elem = res.find_element(By.TAG_NAME, "h2")
