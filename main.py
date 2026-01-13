@@ -13,6 +13,8 @@ for c in companies:
         jobs = greenhouse.fetch(c["url"].split("/")[-1])
     elif c["type"] == "smartrecruiters":
         jobs = smartrecruiters.fetch(c["slug"])
+    elif c["type"] == "html":
+        jobs = html_career.fetch(c["url"])
     else:
         continue
 
