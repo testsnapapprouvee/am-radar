@@ -1,15 +1,25 @@
-import requests
-from bs4 import BeautifulSoup
+import json
+from scraper import welcome, greenhouse, smartrecruiters
+from scoring import score
+from database import seen, save
+from notifier import send
 
-url = "https://www.efinancialcareers.com/jobs-Asset_Management.s002"
-headers = {"User-Agent": "Mozilla/5.0"}
+companies = json.load(open("companies.json"))
 
-response = requests.get(url, headers=headers)
-soup = BeautifulSoup(response.text, "html.parser")
+for c in companies:
+    if c["type"] == "welcome":
+        jobs = welcome.fetch(c["slug"])
+    elif c["type"] == "greenhouse":
+        jobs = greenhouse.fetch(c["url"].split("/")[-1])
+    elif c["type"] == "smartrecruiters":
+        jobs = smartrecruiters.fetch(c["slug"])
+    else:
+        continue
 
-jobs = soup.find_all("article")
+    for j in jobs:
+        j["company"] = c["name"]
+        j["score"] = score(j)
 
-print("ASSET MANAGEMENT JOBS FOUND:\n")
-
-for job in jobs[:10]:
-    print("-", job.text.strip())
+        if j["score"] >= 8 and not seen(j["id"]):
+            save(j)
+            send(f"🔥 {j['company']} – {j['title']} ({j['location']})\n{j['url']}")
