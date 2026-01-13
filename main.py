@@ -17,7 +17,7 @@ TELEGRAM_TOKEN = "8041098189:AAGNgMa1abXsvNGtcgW0mwdpeah-bofkvmA"
 TELEGRAM_CHAT_ID = "5233378719"
 HISTORY_FILE = "history.txt"
 
-# LISTE ATS (Inclus SuccessFactors pour Pictet, Tal.net pour Lazard, etc.)
+# LISTE ATS
 ATS_DOMAINS = [
     "myworkdayjobs.com",   # Julius Baer, Franklin Templeton, BlackRock
     "successfactors.eu",   # PICTET
@@ -43,7 +43,7 @@ def get_driver():
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     chrome_options.add_argument("--disable-gpu")
-    chrome_options.add_argument("--disable-blink-features=AutomationControlled") # Anti-detect Indeed
+    chrome_options.add_argument("--disable-blink-features=AutomationControlled")
     chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36")
     
     chrome_options.binary_location = "/usr/bin/chromium"
@@ -87,12 +87,10 @@ def process_job(title, company, location, link, source, description_snippet=""):
     # 5. Filtre Localisation Strict
     loc_ok = False
     for loc in LOCATIONS:
-        # On vérifie si une de tes villes cibles est mentionnée
         if loc.lower() in location.lower() or loc.lower() in title.lower() or loc.lower() in description_snippet.lower():
             loc_ok = True
             break
     
-    # Pour la Suisse, on est plus permissif si Indeed CH renvoie "Zürich" ou "Genève"
     if "suisse" in location.lower() or "switzerland" in location.lower() or "zurich" in location.lower() or "geneva" in location.lower():
         loc_ok = True
 
@@ -114,42 +112,34 @@ def process_job(title, company, location, link, source, description_snippet=""):
         with open(HISTORY_FILE, "a") as f:
             f.write(link + "\n")
 
-# --- MODULE 1 : INDEED SUISSE (NOUVEAU) ---
+# --- MODULE 1 : INDEED SUISSE ---
 def scrape_indeed_ch():
     print("running: Indeed Suisse (CH)...")
     driver = get_driver()
     try:
-        # URL ciblée : Suisse + Asset Mgmt + Internship
         url = "https://ch.indeed.com/jobs?q=Asset+Management&l=Switzerland&sc=0kf%3Ajt%28internship%29%3B"
         driver.get(url)
-        time.sleep(random.uniform(5, 8)) # Indeed demande de la patience
+        time.sleep(random.uniform(5, 8))
         
-        # Sélecteurs Indeed 2024
         cards = driver.find_elements(By.CLASS_NAME, "resultContent")
-        
         print(f"Indeed CH: {len(cards)} offres trouvées")
 
         for card in cards:
             try:
-                # Titre
                 title_elem = card.find_element(By.CSS_SELECTOR, "h2.jobTitle span")
                 title = title_elem.text
                 
-                # Boite
                 try: company = card.find_element(By.CSS_SELECTOR, "[data-testid='company-name']").text
                 except: company = "Indeed Company"
                 
-                # Lieu
                 try: loc = card.find_element(By.CSS_SELECTOR, "[data-testid='text-location']").text
                 except: loc = "Suisse"
 
-                # Lien (remonter au parent <a>)
                 link_elem = card.find_element(By.XPATH, "./ancestor::tr").find_element(By.TAG_NAME, "a")
                 link = link_elem.get_attribute("href")
                 
                 process_job(title, company, loc, link, "Indeed CH")
             except: continue
-            
     except Exception as e:
         print(f"Erreur Indeed CH: {e}")
     finally:
@@ -168,4 +158,92 @@ def scrape_wttj():
             try:
                 try: title = card.find_element(By.TAG_NAME, "h4").text
                 except: title = card.find_element(By.TAG_NAME, "h3").text
-                company = card.
+                
+                # C'EST ICI QUE L'ERREUR ÉTAIT (LIGNE 171)
+                company = card.find_element(By.TAG_NAME, "span").text 
+                
+                link = card.find_element(By.TAG_NAME, "a").get_attribute("href")
+                process_job(title, company, "Paris", link, "WTTJ")
+            except: continue
+    except: pass
+    finally: driver.quit()
+
+# --- MODULE 3 : JOBTEASER ---
+def scrape_jobteaser():
+    print("running: JobTeaser...")
+    driver = get_driver()
+    try:
+        url = "https://www.jobteaser.com/fr/job-offers?query=Asset+Management&contract=internship"
+        driver.get(url)
+        time.sleep(5)
+        links = driver.find_elements(By.CSS_SELECTOR, "a[href*='/job-offers/']")
+        for link_elem in links:
+            try:
+                link = link_elem.get_attribute("href")
+                text = link_elem.text
+                if not text: continue
+                title = text.split('\n')[0]
+                company = "JobTeaser Partner" 
+                if len(text.split('\n')) > 1: company = text.split('\n')[1]
+                process_job(title, company, "Voir Lien", link, "JobTeaser")
+            except: continue
+    except: pass
+    finally: driver.quit()
+
+# --- MODULE 4 : GOOGLE X-RAY (ATS) ---
+def scrape_ats_xray():
+    print("running: X-Ray ATS...")
+    driver = get_driver()
+    search_locations = ' OR '.join([f'"{loc}"' for loc in LOCATIONS[:6]]) 
+    
+    try:
+        for ats in ATS_DOMAINS:
+            print(f"   🔎 Scan de {ats}...")
+            search_query = f'site:{ats} "Asset Management" ("Stage" OR "Internship") ({search_locations})'
+            url = f"https://www.bing.com/search?q={search_query}"
+            driver.get(url)
+            time.sleep(random.uniform(4, 7)) 
+            
+            results = driver.find_elements(By.CLASS_NAME, "b_algo")
+            for res in results:
+                try:
+                    title_elem = res.find_element(By.TAG_NAME, "h2")
+                    title = title_elem.text
+                    link = res.find_element(By.TAG_NAME, "a").get_attribute("href")
+                    try: snippet = res.find_element(By.CLASS_NAME, "b_caption").text
+                    except: snippet = ""
+                    
+                    company = "Boite Directe"
+                    if "amundi" in link: company = "Amundi"
+                    elif "pictet" in link or "successfactors" in link: company = "Pictet"
+                    elif "tal.net" in link: company = "Lazard"
+                    elif "groupgti" in link: company = "DWS"
+                    elif "-" in title: company = title.split("-")[-1].strip()
+
+                    process_job(title, company, "Site Carrière", link, f"Direct ({ats})", snippet)
+                except: continue
+    except: pass
+    finally: driver.quit()
+
+# --- ORCHESTRATION ---
+def run_all():
+    print("🚀 Démarrage complet...")
+    scrape_indeed_ch()
+    time.sleep(5)
+    scrape_wttj()
+    time.sleep(5)
+    scrape_jobteaser()
+    time.sleep(5)
+    scrape_ats_xray()
+    print("✅ Tournée terminée.")
+
+# Test immédiat
+run_all()
+
+# Planification : Toutes les 4h
+schedule.every(4).hours.do(run_all)
+
+if __name__ == "__main__":
+    while True:
+        schedule.run_pending()
+        time.sleep(60)
