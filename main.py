@@ -2,7 +2,8 @@ import time
 import schedule
 import os
 import requests
-import shutil # Pour trouver le chemin de chrome sur le serveur
+import shutil
+import platform
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
@@ -10,7 +11,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from companies import TARGET_COMPANIES
 from keywords import BLACKLIST, GOLDLIST_JOBS, DATE_KEYWORDS, LOCATIONS
 
-# --- TES IDENTIFIANTS INTÉGRÉS ---
+# --- IDENTIFIANTS TELEGRAM ---
 TELEGRAM_TOKEN = "8041098189:AAGNgMa1abXsvNGtcgW0mwdpeah-bofkvmA"
 TELEGRAM_CHAT_ID = "5233378719"
 
@@ -49,20 +50,38 @@ def scrape_job_board():
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
+    chrome_options.add_argument("--disable-gpu")
     
-    # --- LOGIQUE INTELLIGENTE RAILWAY / LOCAL ---
-    # Détection automatique de l'environnement
-    system_chrome_path = shutil.which("chromium")
-    system_chromedriver_path = shutil.which("chromedriver")
+    # --- DÉTECTION ROBUSTE DU SYSTÈME ---
+    system_os = platform.system()
+    print(f"🖥️ Système détecté : {system_os}")
 
-    if system_chrome_path and system_chromedriver_path:
-        # On est sur Railway (Linux)
-        print(f"🖥️ Mode Serveur détecté. Utilisation de : {system_chrome_path}")
-        chrome_options.binary_location = system_chrome_path
-        service = Service(executable_path=system_chromedriver_path)
+    if system_os == "Linux":
+        # On est sur Railway
+        print("🐧 Mode Linux/Railway activé.")
+        
+        # 1. Chercher Chrome sous plusieurs noms
+        chrome_path = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+        # 2. Chercher le Driver
+        chromedriver_path = shutil.which("chromedriver")
+
+        if chrome_path and chromedriver_path:
+            print(f"✅ Binaires trouvés :\n   Chrome: {chrome_path}\n   Driver: {chromedriver_path}")
+            chrome_options.binary_location = chrome_path
+            service = Service(executable_path=chromedriver_path)
+        else:
+            print("⚠️ ATTENTION : Binaires non trouvés via 'which'. Recherche dans /usr/bin...")
+            # Tentative de forçage si 'which' échoue
+            if os.path.exists("/usr/bin/chromium"):
+                chrome_options.binary_location = "/usr/bin/chromium"
+                service = Service("/usr/bin/chromedriver")
+                print("✅ Binaires forcés via /usr/bin")
+            else:
+                print("❌ CRITIQUE : Chrome introuvable sur le serveur.")
+                return
     else:
-        # On est sur ton PC (Mac/Windows)
-        print("💻 Mode Local détecté.")
+        # On est sur ton Mac/PC
+        print("💻 Mode Local (Mac/Windows).")
         try:
             service = Service(ChromeDriverManager().install())
         except Exception as e:
@@ -71,14 +90,15 @@ def scrape_job_board():
     
     try:
         driver = webdriver.Chrome(service=service, options=chrome_options)
+        print("🚀 Navigateur lancé avec succès !")
     except Exception as e:
-        print(f"❌ CRASH DRIVER (Impossible de lancer Chrome): {e}")
+        print(f"❌ CRASH DRIVER (Erreur fatale): {e}")
         return
 
-    # --- SIMULATION (TEST) ---
+    # --- LE RESTE NE CHANGE PAS ---
     mock_jobs = [
-        {"title": "Stage Sales Asset Management", "company": "Amundi", "loc": "Paris", "desc": "Début Mai", "link": "http://amundi.com/job-test"},
-        {"title": "Stage Private Equity", "company": "Tikehau", "loc": "Paris", "desc": "Avril 2026", "link": "http://tikehau.com/job-test"},
+        {"title": "Stage Sales Asset Management", "company": "Amundi", "loc": "Paris", "desc": "Début Mai", "link": "http://amundi.com/job-test-final"},
+        {"title": "Stage Private Equity", "company": "Tikehau", "loc": "Paris", "desc": "Avril 2026", "link": "http://tikehau.com/job-test-final"},
     ]
 
     if not os.path.exists(HISTORY_FILE):
@@ -96,7 +116,7 @@ def scrape_job_board():
         if score >= 6: 
             emoji = "🔥" if score >= 8 else "✅"
             msg = (
-                f"{emoji} *Test Bot ({score}/10)*\n\n"
+                f"{emoji} *Bot Actif ({score}/10)*\n\n"
                 f"🏢 {job['company']}\n"
                 f"💼 {job['title']}\n"
                 f"📍 {job['loc']}\n"
@@ -109,12 +129,11 @@ def scrape_job_board():
                 f.write(job['link'] + "\n")
                 
     driver.quit()
-    print("✅ Scraping terminé avec succès.")
+    print("✅ Scraping terminé.")
 
-# Lancement immédiat au démarrage
+# Lancement au démarrage
 scrape_job_board()
 
-# Planification tous les jours
 schedule.every().day.at("09:00").do(scrape_job_board)
 
 if __name__ == "__main__":
