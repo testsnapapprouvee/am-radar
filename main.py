@@ -1,137 +1,127 @@
 import time
 import schedule
 import os
+import requests
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.common.by import By
-# On utilise CallMeBot pour faire simple (pas besoin de compte Twilio payant/complexe)
-import requests 
 from companies import TARGET_COMPANIES
 from keywords import BLACKLIST, GOLDLIST_JOBS, DATE_KEYWORDS, LOCATIONS
 
-# --- CONFIGURATION ---
-# Sur Railway, ces variables seront dans les "Variables d'environnement"
-PHONE_NUMBER = os.getenv("PHONE_NUMBER") # Ton numéro avec format international (ex: 33600...)
-API_KEY = os.getenv("API_KEY") # Ta clé CallMeBot
+# --- CONFIGURATION TELEGRAM ---
+# J'ai mis ton token ici.
+TELEGRAM_TOKEN = "8041098189:AAGNgMa1abXsvNGtcgW0mwdpeah-bofkvmA"
+
+# ⚠️ REMPLACE LE 0 CI-DESSOUS PAR LE NUMÉRO QUE TU AS TROUVÉ DANS LE LIEN
+TELEGRAM_CHAT_ID = "5233378719" 
 
 HISTORY_FILE = "history.txt"
 
-def send_whatsapp(message):
-    url = f"https://api.callmebot.com/whatsapp.php?phone={PHONE_NUMBER}&text={message}&apikey={API_KEY}"
+def send_telegram(message):
+    """Envoie le message sur Telegram"""
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
     try:
-        requests.get(url)
-        print("✅ Notification envoyée !")
+        response = requests.post(url, json=payload)
+        if response.status_code != 200:
+            print(f"❌ Erreur Telegram: {response.text}")
+        else:
+            print("✅ Message envoyé !")
     except Exception as e:
-        print(f"❌ Erreur envoi WhatsApp: {e}")
+        print(f"❌ Erreur connexion: {e}")
 
 def calculate_score(title, company, description, location):
-    score = 5 # Base score pour "Stage Asset Mgmt"
+    score = 5 
     
-    # 1. Check Blacklist (Kill Switch)
+    # 1. Kill Switch
     for bad_word in BLACKLIST:
         if bad_word.lower() in title.lower():
-            return 0 # Offre rejetée
+            return 0 
 
-    # 2. Check Company (Le gros bonus)
-    is_top_tier = False
+    # 2. Company Bonus
     for target in TARGET_COMPANIES:
         if target.lower() in company.lower():
             score += 3
-            is_top_tier = True
             break
     
-    # 3. Check Job Type
+    # 3. Job Type Bonus
     for gold_word in GOLDLIST_JOBS:
         if gold_word.lower() in title.lower():
             score += 2
             break
             
-    # 4. Check Date
+    # 4. Date Bonus
     for date_word in DATE_KEYWORDS:
         if date_word.lower() in description.lower():
             score += 1
             break
 
-    # 5. Filtre Luxembourg (Doit être une top offre)
+    # 5. Filtre Luxembourg
     if "luxembourg" in location.lower() and score < 7:
-        return 0 # On ignore les offres moyennes au Lux
+        return 0 
 
     return score
 
 def scrape_job_board():
     print("🔄 Lancement du scraping...")
     
-    # Setup Chrome pour serveur (Headless)
     chrome_options = Options()
     chrome_options.add_argument("--headless") 
     chrome_options.add_argument("--no-sandbox")
     chrome_options.add_argument("--disable-dev-shm-usage")
     
-    # Installation auto du driver
-    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
-    
-    # --- URL CIBLE (Exemple Indeed ou eFinancialCareers) ---
-    # Note: Ceci est un exemple générique. 
-    # Pour un vrai scrape, il faut cibler une URL précise et adapter les sélecteurs CSS.
-    url = "https://www.efinancialcareers.fr/jobs/Asset_Management/in_Paris?q=Stage"
     try:
-        driver.get(url)
-        time.sleep(5)
-        
-        # Simulation récupération d'offres (A REMPLACER PAR VRAI SELECTEUR)
-        # jobs = driver.find_elements(By.CLASS_NAME, "job-card") 
-        
-        # --- DONNÉES DE TEST POUR VALIDER LA LOGIQUE ---
-        # Une fois le bot en place, on remplacera ça par le vrai scraping
-        mock_jobs = [
-            {"title": "Stage Sales Asset Management", "company": "Amundi", "loc": "Paris", "desc": "Début Mai", "link": "http://amundi.com"},
-            {"title": "Internship Compliance", "company": "BlackRock", "loc": "London", "desc": "Start May", "link": "http://blackrock.com/compliance"}, # Devrait être rejeté (Blacklist)
-            {"title": "Stage Private Equity", "company": "Tikehau", "loc": "Paris", "desc": "Avril 2026", "link": "http://tikehau.com"},
-            {"title": "Assistant Gestion", "company": "Banque Inconnue", "loc": "Luxembourg", "desc": "Mai", "link": "http://unknown.com"} # Devrait être rejeté (Score faible Lux)
-        ]
-
-        # Chargement historique
-        if not os.path.exists(HISTORY_FILE):
-            open(HISTORY_FILE, "w").close()
-        
-        with open(HISTORY_FILE, "r") as f:
-            history = f.read()
-
-        for job in mock_jobs:
-            if job['link'] in history:
-                continue
-
-            score = calculate_score(job['title'], job['company'], job['desc'], job['loc'])
-            
-            if score >= 6: # On notifie seulement si score décent
-                emoji = "🔥" if score >= 8 else "✅"
-                msg = (
-                    f"{emoji} *Nouvelle Offre ({score}/10)*\n"
-                    f"🏢 {job['company']}\n"
-                    f"💼 {job['title']}\n"
-                    f"📍 {job['loc']}\n"
-                    f"🔗 {job['link']}"
-                )
-                # Encodage URL pour WhatsApp
-                encoded_msg = requests.utils.quote(msg)
-                send_whatsapp(encoded_msg)
-                
-                # Sauvegarde pour ne pas renvoyer
-                with open(HISTORY_FILE, "a") as f:
-                    f.write(job['link'] + "\n")
-
+        driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
     except Exception as e:
-        print(f"Erreur scraping: {e}")
-    finally:
-        driver.quit()
+        print(f"Erreur driver: {e}")
+        return
 
-# Planification : Tous les jours à 09h00
+    # --- SIMULATION DE DONNÉES (TEST) ---
+    mock_jobs = [
+        {"title": "Stage Sales Asset Management", "company": "Amundi", "loc": "Paris", "desc": "Début Mai", "link": "http://amundi.com/job1"},
+        {"title": "Stage Private Equity", "company": "Tikehau", "loc": "Paris", "desc": "Avril 2026", "link": "http://tikehau.com/job2"},
+    ]
+
+    if not os.path.exists(HISTORY_FILE):
+        open(HISTORY_FILE, "w").close()
+    
+    with open(HISTORY_FILE, "r") as f:
+        history = f.read()
+
+    for job in mock_jobs:
+        if job['link'] in history:
+            print(f"Déjà vu: {job['company']}")
+            continue
+
+        score = calculate_score(job['title'], job['company'], job['desc'], job['loc'])
+        
+        if score >= 6: 
+            emoji = "🔥" if score >= 8 else "✅"
+            msg = (
+                f"{emoji} *Nouvelle Offre ({score}/10)*\n\n"
+                f"🏢 *Boite:* {job['company']}\n"
+                f"💼 *Poste:* {job['title']}\n"
+                f"📍 *Lieu:* {job['loc']}\n"
+                f"🔗 [Lien]({job['link']})"
+            )
+            
+            send_telegram(msg)
+            
+            with open(HISTORY_FILE, "a") as f:
+                f.write(job['link'] + "\n")
+                
+    driver.quit()
+
+# Test immédiat
+scrape_job_board()
+
+# Planification
 schedule.every().day.at("09:00").do(scrape_job_board)
-
-# Pour tester tout de suite au lancement du script :
-scrape_job_board() 
 
 if __name__ == "__main__":
     while True:
